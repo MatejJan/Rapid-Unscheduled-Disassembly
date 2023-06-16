@@ -1,87 +1,81 @@
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace RapidUnscheduledDisassembly
 {
-    public class Nozzle : MonoBehaviour
+    public class Nozzle : Structure, IContainer
     {
-        public const float particleRateFactor = 5e5f;
-        public const float particleSpeedFactor = 1e-2f;
-
         public float throatDiameter;
         public float exitDiameter;
 
-        public float exitMachNumber;
+        private readonly Dictionary<float, float> _exitMachNumbers = new();
 
-        public Tank parent;
-
-        public float exitSpeed;
-        public float ventedMass;
-
-        private ParticleSystem _particleSystem;
+        private Vent _vent;
 
         public float throatArea => Mathf.PI * Mathf.Pow(throatDiameter / 2f, 2);
         public float exitArea => Mathf.PI * Mathf.Pow(exitDiameter / 2f, 2);
 
         private void Start()
         {
-            parent = transform.parent.parent.GetComponent<Tank>();
-
-            _particleSystem = GetComponent<ParticleSystem>();
-
-            CalculateExitMachNumber();
+            _vent = transform.Find("Vent").GetComponent<Vent>();
         }
 
-        private void Update()
+        protected override void FixedUpdate()
         {
-            ParticleSystem.MainModule main = _particleSystem.main;
-            main.startSpeed = exitSpeed * particleSpeedFactor;
+            base.FixedUpdate();
 
-            ParticleSystem.EmissionModule emission = _particleSystem.emission;
-            emission.rateOverTime = ventedMass * particleRateFactor;
-        }
-
-        private void FixedUpdate()
-        {
-            float specificHeatRatio = parent.contents.specificHeatRatio;
-
-            // Calculate exit pressure and temperature.
-            // pe / pt = [1 + Me^2 * (gam-1)/2]^-[gam/(gam-1)]
-            // Te / Tt = [1 + Me^2 * (gam-1)/2]^-1
-            float exitPressure = parent.contents.pressure * Mathf.Pow(1 + Mathf.Pow(exitMachNumber, 2) * (specificHeatRatio - 1) / 2, -specificHeatRatio / (specificHeatRatio - 1));
-            float exitTemperature = parent.contents.temperature * Mathf.Pow(1 + Mathf.Pow(exitMachNumber, 2) * (specificHeatRatio - 1) / 2, -1);
-
-            float R = Physicsf.molarGasConstant / parent.contents.molarMass;
-
-            // Calculate exit speed.
-            // Me * sqrt (gam * R * Te)
-            exitSpeed = exitMachNumber * Mathf.Sqrt(specificHeatRatio * R * exitTemperature);
-
-            // Calculate mass flow rate.
-            // mdot = (A* * pt/sqrt[Tt]) * sqrt(gam/R) * [(gam + 1)/2]^-[(gam + 1)/(gam - 1)/2]
-            float massFlowRate = throatArea * parent.contents.pressure / Mathf.Sqrt(parent.contents.temperature) * Mathf.Sqrt(specificHeatRatio / R) * Mathf.Pow((specificHeatRatio + 1) / 2, -(specificHeatRatio + 1) / (specificHeatRatio - 1) / 2);
-
-            // Vent the material.
-            ventedMass = Mathf.Min(parent.contents.mass, massFlowRate * Time.fixedDeltaTime);
-            parent.contents.mass -= ventedMass;
-
-            // Calculate thrust.
-            // F = m dot * Ve + (pe - p0) * Ae
-            float forceAmount = massFlowRate * exitSpeed + (exitPressure - Physicsf.atmosphericPressure) * exitArea;
-
-            int n = 1;
-
-            for (int i = 0; i < n; i++)
+            foreach (Material material in contents.materials)
             {
-                Vector3 direction = (-transform.forward * 5 + Random.insideUnitSphere).normalized;
+                if (material.mass == 0) continue;
 
-                parent.AddForce(forceAmount / n * direction);
+                float specificHeatRatio = material.type.specificHeatRatio;
+                float exitMachNumber = GetExitMachNumber(specificHeatRatio);
+
+                // Calculate exit pressure and temperature.
+                // pe / pt = [1 + Me^2 * (gam-1)/2]^-[gam/(gam-1)]
+                // Te / Tt = [1 + Me^2 * (gam-1)/2]^-1
+                float exitPressure = material.pressure * Mathf.Pow(1 + Mathf.Pow(exitMachNumber, 2) * (specificHeatRatio - 1) / 2, -specificHeatRatio / (specificHeatRatio - 1));
+                float exitTemperature = material.temperature * Mathf.Pow(1 + Mathf.Pow(exitMachNumber, 2) * (specificHeatRatio - 1) / 2, -1);
+
+                float R = Physicsf.molarGasConstant / material.type.molarMass;
+
+                // Calculate exit speed.
+                // Me * sqrt (gam * R * Te)
+                float exitSpeed = exitMachNumber * Mathf.Sqrt(specificHeatRatio * R * exitTemperature);
+
+                // Calculate mass flow rate.
+                // mdot = (A* * pt/sqrt[Tt]) * sqrt(gam/R) * [(gam + 1)/2]^-[(gam + 1)/(gam - 1)/2]
+                float massFlowRate = throatArea * material.pressure / Mathf.Sqrt(material.temperature) * Mathf.Sqrt(specificHeatRatio / R) * Mathf.Pow((specificHeatRatio + 1) / 2, -(specificHeatRatio + 1) / (specificHeatRatio - 1) / 2);
+
+                // Vent the material.
+                contents.RemoveMaterial(material.type, massFlowRate * Time.fixedDeltaTime);
+                _vent.SetVentParameters(material, exitSpeed, massFlowRate);
+
+                // Calculate thrust.
+                // F = m dot * Ve + (pe - p0) * Ae
+                float forceAmount = massFlowRate * exitSpeed + (exitPressure - Physicsf.atmosphericPressure) * exitArea;
+                Vector3 direction = (transform.up * 10 + Random.insideUnitSphere).normalized;
+                AddForce(forceAmount * direction, transform.position);
             }
+
+            contents.Update();
         }
 
-        private void CalculateExitMachNumber()
+        public Contents contents { get; } = new();
+
+        public float GetPressureAtPoint(Vector3 point, out float liquidPressure)
         {
+            liquidPressure = 0;
+
+            return 0;
+        }
+
+        private float GetExitMachNumber(float specificHeatRatio)
+        {
+            if (_exitMachNumbers.ContainsKey(specificHeatRatio)) return _exitMachNumbers[specificHeatRatio];
+
             float arat = exitArea / throatArea;
-            float gamma = parent.contents.specificHeatRatio;
+            float gamma = specificHeatRatio;
             float f1 = (gamma + 1) / (2 * (gamma - 1));
             float a0 = 2;
             float m0 = 2.2f;
@@ -97,7 +91,9 @@ namespace RapidUnscheduledDisassembly
                 m1 = m0 + (arat - a0) / am;
             }
 
-            exitMachNumber = m0;
+            _exitMachNumbers[specificHeatRatio] = m0;
+
+            return m0;
         }
     }
 }

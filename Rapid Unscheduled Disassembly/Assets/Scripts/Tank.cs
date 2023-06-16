@@ -1,77 +1,101 @@
+using System;
+using System.Linq;
 using UnityEngine;
 
 namespace RapidUnscheduledDisassembly
 {
-    public class Tank : MonoBehaviour
+    [Serializable]
+    public class Tank : Structure, IContainer
     {
         public float volume;
         public float maximumPressure;
 
-        public Material contents;
-        public float thrustToWeightRatio;
-
         private float _emptyMass;
-        private float _thrust;
 
-        private Rigidbody _rigidbody;
-
-        public void Awake()
+        protected override void Awake()
         {
-            _rigidbody = GetComponent<Rigidbody>();
-            _emptyMass = _rigidbody.mass;
+            base.Awake();
+
+            _emptyMass = rigidbody.mass;
 
             SphereCollider sphereCollider = GetComponent<SphereCollider>();
 
-            if (sphereCollider is not null)
+            if (sphereCollider != null)
             {
                 volume = 4f / 3f * Mathf.PI * Mathf.Pow(sphereCollider.radius, 3);
             }
 
             CapsuleCollider capsuleCollider = GetComponent<CapsuleCollider>();
 
-            if (capsuleCollider is not null)
+            if (capsuleCollider != null)
             {
                 volume = 4f / 3f * Mathf.PI * Mathf.Pow(capsuleCollider.radius, 3) + Mathf.PI * Mathf.Pow(capsuleCollider.radius, 2) * (capsuleCollider.height - capsuleCollider.radius * 2);
             }
 
-            UpdatePressure();
+            UpdateContents();
         }
 
-        public void FixedUpdate()
+        protected override void FixedUpdate()
         {
-            UpdatePressure();
+            UpdateContents();
 
-            _rigidbody.mass = _emptyMass + contents.mass;
+            UpdateAvailableVolume();
+            contents.Update();
 
-            // Add some wind.
-            float windAmount = Random.value * 0.01f;
-            Vector3 windDirection = Vector3.left;
-            Vector3 position = transform.position + Random.insideUnitSphere;
-
-            _rigidbody.AddForceAtPosition(windAmount * windDirection, position);
-
-            // Display thrust to weight ratio.
-            thrustToWeightRatio = _thrust / (_rigidbody.mass * Physics.gravity.magnitude);
-            _thrust = 0;
+            rigidbody.mass = _emptyMass + contents.materials.Sum(material => material.mass);
         }
 
-        public void UpdatePressure()
-        {
-            // Update pressure.
-            // P = (nRT) / V
-            float n = contents.amountOfSubstance;
-            float R = Physicsf.molarGasConstant;
-            float T = contents.temperature;
-            float V = volume;
+        [field: SerializeField] public Contents contents { get; private set; } = new();
 
-            contents.pressure = n * R * T / V;
+        public float GetPressureAtPoint(Vector3 point, out float liquidPressure)
+        {
+            float tankHeight = Mathf.Pow(volume, 1 / 3f);
+            float tankBottom = transform.position.y - tankHeight;
+
+            float liquidVolume = 0;
+            float liquidDensity = 0;
+
+            foreach (Material material in contents.liquids)
+            {
+                liquidVolume += material.volume;
+                liquidDensity += material.mass;
+            }
+
+            if (liquidVolume > 0)
+            {
+                liquidDensity /= liquidVolume;
+            }
+
+            float liquidHeight = Mathf.Pow(liquidVolume, 1 / 3f);
+            float liquidTop = tankBottom + liquidHeight;
+            float heightInLiquid = Math.Max(0, liquidTop - point.y);
+            liquidPressure = liquidDensity * -Physics.gravity.y * heightInLiquid;
+
+            float gasPressure = contents.gasses.Sum(material => material.pressure);
+
+            return gasPressure + liquidPressure;
         }
 
-        public void AddForce(Vector3 force)
+        private void UpdateContents()
         {
-            _rigidbody.AddForce(force);
+            UpdateAvailableVolume();
+            contents.Update();
+        }
 
-            _thrust += force.magnitude;
+        private void UpdateAvailableVolume()
+        {
+            float liquidsVolume = contents.liquids.Sum(material => material.volume);
+            float gassesVolume = Mathf.Max(0.1f, volume - liquidsVolume);
+
+            foreach (Material material in contents.gasses)
+            {
+                material.availableVolume = gassesVolume;
+            }
+
+            foreach (Material material in contents.liquids)
+            {
+                material.availableVolume = volume - liquidsVolume + material.volume;
+            }
         }
     }
 }

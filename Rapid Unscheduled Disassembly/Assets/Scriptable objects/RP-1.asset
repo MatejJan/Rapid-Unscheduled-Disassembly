@@ -1,0 +1,26 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: c8b237b2f1924a03a63bd6d4ac608320, type: 3}
+  m_Name: RP-1
+  m_EditorClassIdentifier: 
+  molarMass: 0.175
+  specificHeatRatio: 1.25
+  boilingPoint:
+    lowPressure: 10000
+    lowTemperature: 460
+    highPressure: 1000000
+    highTemperature: 540
+  liquidDensity: 578
+  particleRateFactor: 10000
+  particleSpeedFactor: 1
+  particleColor: {r: 0.6603774, g: 0.15886435, b: 0.23633377, a: 0.6392157}
+  particleMaterial: {fileID: 2100000, guid: ce8ff125e070c462e92cdce98ddcf333, type: 2}

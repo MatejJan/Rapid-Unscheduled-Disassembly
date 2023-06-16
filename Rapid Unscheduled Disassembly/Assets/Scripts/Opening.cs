@@ -1,83 +1,139 @@
+using System.Linq;
 using UnityEngine;
 
 namespace RapidUnscheduledDisassembly
 {
     public class Opening : MonoBehaviour
     {
-        public const float particleRateFactor = 5e5f;
-        public const float particleSpeedFactor = 1e-2f;
+        public MaterialType air;
 
         public float diameter;
 
-        public Tank parent;
+        public Structure parentStructure;
 
-        public float exitSpeed;
-        public float ventedMass;
+        public Opening connectedOpening;
 
-        private ParticleSystem _particleSystem;
+        public float externalPressure;
+        public float internalPressure;
+
+        public IContainer parentContainer;
+
+        private Vent _vent;
 
         public float area => Mathf.PI * Mathf.Pow(diameter / 2f, 2);
 
         private void Start()
         {
-            parent = transform.parent.parent.GetComponent<Tank>();
+            Transform structureTransform = transform.parent.parent;
+            parentStructure = structureTransform.GetComponent<Structure>();
+            parentContainer = structureTransform.GetComponent<IContainer>();
 
-            _particleSystem = GetComponent<ParticleSystem>();
-        }
-
-        private void Update()
-        {
-            ParticleSystem.MainModule main = _particleSystem.main;
-            main.startSpeed = exitSpeed * particleSpeedFactor;
-
-            ParticleSystem.EmissionModule emission = _particleSystem.emission;
-            emission.rateOverTime = ventedMass * particleRateFactor;
+            _vent = transform.Find("Vent").GetComponent<Vent>();
         }
 
         private void FixedUpdate()
         {
-            float pressure = parent.contents.pressure - Physicsf.atmosphericPressure;
+            internalPressure = parentContainer.GetPressureAtPoint(transform.position, out float liquidPressure);
+
+            if (connectedOpening is null)
+            {
+                externalPressure = Physicsf.atmosphericPressure;
+            }
+            else
+            {
+                externalPressure = connectedOpening.parentContainer.GetPressureAtPoint(transform.position, out _);
+            }
+
+            float pressure = internalPressure - externalPressure;
 
             if (pressure < 0)
             {
-                exitSpeed = 0;
-                ventedMass = 0;
+                // If there is a connection, the other side will push material in.
+                if (connectedOpening is not null) return;
+
+                // Suck air into the hole.
+
+                // Calculate entrance velocity.
+                // v = √(2P / ρ)
+                float density = Physicsf.airDensityAtSeaLevel;
+                float enterSpeed = Mathf.Sqrt(2 * -pressure / density);
+
+                // Calculate mass flow rate.
+                // Q = ρ * v * A
+                float massFlowRate = density * enterSpeed * area;
+
+                // Absorb the air.
+                Material absorbedAir = new()
+                {
+                    type = air,
+                    mass = massFlowRate * Time.fixedDeltaTime,
+                    temperature = 300
+                };
+
+                parentContainer.contents.AddMaterial(absorbedAir);
 
                 return;
             }
 
-            // Calculate exit velocity.
-            // v = √(2P / ρ)
-            float density = parent.contents.mass / parent.volume;
-            exitSpeed = Mathf.Sqrt(2 * pressure / density);
+            float minimumArea = area;
 
-            // Calculate flow rate.
-            // Q = v * A
-            float flowRate = exitSpeed * area;
-
-            // Vent the material.
-            float ventedVolume = flowRate * Time.fixedDeltaTime;
-            ventedMass = ventedVolume * density;
-
-            if (ventedMass > parent.contents.mass)
+            if (connectedOpening is not null && connectedOpening.area < area)
             {
-                ventedMass = parent.contents.mass;
-                ventedVolume = ventedMass / density;
+                minimumArea = connectedOpening.area;
             }
 
-            parent.contents.mass -= ventedMass;
+            float totalVolume = parentContainer.contents.materials.Sum(material => material.volume);
+            float totalLiquidVolume = parentContainer.contents.liquids.Sum(material => material.volume);
 
-            // Create the force.
-            // F = (m * v) / Δt
-            float forceAmount = ventedMass * exitSpeed / Time.fixedDeltaTime;
-
-            int n = 1;
-
-            for (int i = 0; i < n; i++)
+            foreach (Material material in parentContainer.contents.materials)
             {
-                Vector3 direction = (-transform.forward + Random.insideUnitSphere).normalized;
+                if (material.mass == 0) continue;
 
-                parent.AddForce(forceAmount / n * direction);
+                if (liquidPressure > 0 && material.state != Material.State.Liquid) continue;
+
+                // Calculate exit velocity.
+                // v = √(2P / ρ)
+                float density = material.mass / material.volume;
+                float exitSpeed = Mathf.Sqrt(2 * pressure / density);
+
+                // Calculate mass flow rate.
+                // Q = ρ * v * A
+                float massFlowRate = density * exitSpeed * minimumArea;
+
+                // Weight it by volume % in the container.
+                if (liquidPressure > 0)
+                {
+                    massFlowRate *= material.volume / totalLiquidVolume;
+                }
+                else
+                {
+                    massFlowRate *= material.volume / totalVolume;
+                }
+
+                // Remove the material.
+                float removedMass = Mathf.Min(material.mass, massFlowRate * Time.fixedDeltaTime);
+                Material removedMaterial = parentContainer.contents.RemoveMaterial(material.type, removedMass);
+
+                if (connectedOpening is null)
+                {
+                    // Vent the material.
+                    _vent.SetVentParameters(material, exitSpeed, massFlowRate);
+
+                    // Create the force.
+                    // F = (m * v) / Δt
+                    float forceAmount = removedMass * exitSpeed / Time.fixedDeltaTime;
+
+                    Vector3 direction = (transform.up + Random.insideUnitSphere).normalized;
+
+                    if (parentStructure != null)
+                    {
+                        parentStructure.AddForce(forceAmount * direction, transform.position);
+                    }
+                }
+                else
+                {
+                    connectedOpening.parentContainer.contents.AddMaterial(removedMaterial);
+                }
             }
         }
     }
